@@ -1,0 +1,143 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "Charlie Towner"
+date: "January 16, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+########
+##
+##  PRACTICAL MACHINE LEARNING FINAL COURSE PROJECT
+## 
+##  Background:
+##  Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively 
+##  inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly
+##  to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of
+##  a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the 
+##  belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More 
+##  information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+##  
+##  Data
+##
+##  The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+##
+##  The test data are available here:  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+##
+##  GOAL
+##
+##  The goal of the project is to create a predictive model that will predict the outcome of a bicep curl exercise based on ~ 155-160
+##  recorded measurements taken from recording devices on a belt, forearm, upper arm, and dumbbell. The data was provided in 2 files: a
+##  training file of ~ 19,600 records and a test file of 20 records.
+##
+##  OUTCOMES
+##
+##  The outcome class can have one of 5 values:
+##
+##  A - Exercise executed correctly
+##  B - Throwing the elbows to the front
+##  C - Lifting the dumbbell only halfway
+##  D - Lowering the dumbbell only halfway
+##  E - Throwing the hips forward
+##
+##
+##  First Step: Get the data loaded:
+
+```{r}
+training <- read.csv("C:/Coursera/Practical_ML/fnlproj/pml-training.csv", stringsAsFactors = FALSE)
+testing <- read.csv("C:/Coursera/Practical_ML/fnlproj/pml-testing.csv", stringsAsFactors = FALSE  )
+set.seed(3423)
+```
+
+# Check the training dataset for zero or near-zero variance. Display the metrics. Then remove the variables that are near-zero variance. This will print the
+# list of near-zero variables
+```{r}
+require(caret)
+nzm_toprint <- nearZeroVar(training, saveMetrics=TRUE)
+nzm_toprint
+nzm <- nearZeroVar(training)
+train_nzv_rmvd <- training[,-nzm]
+```
+
+# Get the total # of records in the training dataset
+```{r}
+require(dplyr)
+totrecs <- count(train_nzv_rmvd)[[1]]
+```
+
+# This block removes any column that has NA for > 95% of the records
+```{r}
+cols_na <- apply(train_nzv_rmvd, 2, function(x) {ifelse(sum(is.na(x))/totrecs>0.95,TRUE,FALSE)})
+cols_rmv <- which(cols_na==TRUE)
+train_fnl <- train_nzv_rmvd[,-cols_rmv]
+
+train_fnl <- select(train_fnl, -starts_with("raw_time"))
+train_fnl <- select(train_fnl, -X, -cvtd_timestamp)
+train_fnl <- select(train_fnl, classe, everything())
+```
+
+# Split the training and test data; 2 comments: I realize that decision tree methodologies aren't sensitive to large variations in numeric scale so scaling/
+# centering is not required. However, I believe the results show that it doesn't necessarily hurt either, in this case. I intend to run this unscaled & 
+# uncentered as well. I want to have a scaled version to apply some other methods to that are sensitive to differences in scale. Comment 2: I used K Nearest
+# Neighbor imputing to fill in missing variables, although there were few.
+
+```{r}
+inTrain <- createDataPartition(y=train_fnl$classe,p=0.7, list=FALSE)
+ss_train <- train_fnl[inTrain,]
+ss_test <- train_fnl[-inTrain,]
+preproc_ss <- preProcess(ss_train,method="knnImpute")
+nsimp_ss_train <- predict(preproc_ss,ss_train)
+nsimp_ss_test <- predict(preproc_ss,ss_test)
+```
+
+# Random Forest algorithm using 10-fold cross-validation
+```{r}
+cntrl <- trainControl(method="cv",number=10)
+RFfitcv <- train(nsimp_ss_train[,c(3:55)],nsimp_ss_train[,1],data=nsimp_ss_train,method="rf", trControl=cntrl)
+RFfitcv$finalModel
+```
+# Use the model on the validation test data.
+```{r}
+pred_RFcv <- predict(RFfitcv,nsimp_ss_test)
+ConfMat_RF <- confusionMatrix(pred_RFcv, nsimp_ss_test$classe)
+```
+
+# Display the Confusion Matrix output & the Bar Chart of the accuracy by class for the Random Forest Method
+```{r}
+ConfMat_RF
+plot(ConfMat_RF$table, col=ConfMat_RF$byClass, main = paste("Random Forest Accuracy = ", round(ConfMat_RF$overall['Accuracy'], 4)))
+```
+
+# Generalized Boosted Model
+```{r}
+library(gbm) 
+library(plyr)
+library(splines2)
+GBMfitcv <- train(classe~.,data=nsimp_ss_train,method="gbm", trControl=cntrl) 
+GBMfitcv$finalModel
+pred_GBMcv <- predict(GBMfitcv,nsimp_ss_test)
+ConfMat_GBM <- confusionMatrix(pred_GBMcv, nsimp_ss_test$classe)
+
+```
+
+# Display the Confusion Matrix output & the Bar Chart of the accuracy by class for the Boosted Method
+```{r}
+ConfMat_GBM
+plot(ConfMat_GBM$table, col=ConfMat_GBM$byClass, main = paste("General Boosted Model Accuracy = ", round(ConfMat_GBM$overall['Accuracy'], 4)))
+```
+
+
+#Run the model on the test data on the Random Forest Model after removing the variables that were removed in the training data & applying the pre-
+# processing modifications. The out-of-sample error rate is 0.0015.
+```{r}
+test_nzv_rmvd <- testing[,-nzm]
+test_fnl <- test_nzv_rmvd[,-cols_rmv]
+
+test_fnl <- select(test_fnl, -starts_with("raw_time"))
+test_fnl <- select(test_fnl, -X, -cvtd_timestamp)
+preproc_test <- predict(preproc_ss,test_fnl)
+test_pred <- predict(RFfitcv, newdata=preproc_test)
+test_pred
+```
